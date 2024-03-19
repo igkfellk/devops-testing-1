@@ -1,0 +1,2 @@
+[srv1]
+10.0.5.142:22 ansible_user=i.kucherenko
