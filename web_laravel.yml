@@ -1,0 +1,318 @@
+- name: Добавление недостающих репозиториев
+  hosts: srv1
+  become: yes
+  tasks:
+    - name: Ключ репозитория
+      apt_key:
+        url: https://packages.sury.org/php/apt.gpg
+        state: present
+
+    - name: PHP репозиторий
+      become: yes
+      become_method: sudo
+      command: add-apt-repository -y ppa:ondrej/php
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Апгрейд пакетов
+      apt:
+        upgrade: dist
+
+  handlers:
+    - name: Обновление для apt
+      apt:
+        update_cache: yes
+- name: Создание пользователя ubuntu и предоставление sudo-прав без ввода пароля
+  hosts: srv1
+  become: yes
+  tasks:
+    - name: Установить библиотеку passlib
+      become: yes
+      apt:
+        name: python3-passlib
+        state: present
+    - name: Создание пользователя "ubuntu"
+      user:
+        name: ubuntu
+        shell: /bin/bash
+        password: "{{ 'password123456' | password_hash('sha512') }}"
+        password_lock: false
+        state: present
+    - name: Создание пароля для пользователя  ubuntu
+      become: yes
+      shell: |
+        echo "ubuntu:{{ 'password123456' | password_hash('sha512') }}" | chpasswd
+      args:
+        creates: /etc/shadow
+    - name: Предоставление sudo-прав без ввода пароля
+      lineinfile:
+        dest: /etc/sudoers
+        line: 'ubuntu ALL=(ALL) NOPASSWD: ALL'
+    - name: Create .ssh directory
+      file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0700'
+    - name: Create authorized_keys file
+      file:
+        path: /home/ubuntu/.ssh/authorized_keys
+        state: touch
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+    - name: Добавление ключа для входа по ssh без пароля
+      become: yes
+      blockinfile:
+        path: /home/ubuntu/.ssh/authorized_keys
+        block: |
+          ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCzGizh7tJ5DkDgkamMXyldpQd6jLEQTglrvUmewoJLB6k1VqmrjgP6LScJ1XqcG7w2SlUiovCRzIP2IDgHhpMosl1Inf1McODWyMzJbEJgCKPI+yQewFUXeQkLs3o2olPiBW8gMn0nx7pm0IMcnJVTzwvcl29u45Ye2udAefw00Gncyg89vbxcp1knf5w4M8tH5NxxxlrRIcqVyO0pdhjtxgdjBV1r4mYIWN1G4cIHZF2s+Kc9FCONS2i4iNW7lADcRBtRUK717H3hd08mJ4wJgR9hpGCHziV7geRY6u4p2r+9uzY55GHbeD25mAS+fYY5xDf4cPHkulKe7VRm2niadBmho1nI52YQdI/3x/cBMv3QcUWllfT//5wsYwyrTWFgH5tIDu+7I8JcpdMgU7D6uswovPKgJ50jIFVshUBCiuJp/YXpIkWVsoaMUuv3Hxsv/vfRoiSN3r1a76gId6+cmRFA/rtqM0oUoVWNTyYBDX2RBdNEAeCdmjXdVXUJwtM= pistolet\i.kucherenko@MLN-IT-01
+        insertbefore: BOOM
+        marker: BOOM
+- name: Установка Nginx, PHP, MySQL, Composer, iptables-persistent
+  hosts: srv1
+  gather_facts: false
+  become: yes
+  tasks:
+    - name: Установка Nginx, PHP, MySQL, Composer, iptables-persistent
+      apt:
+        pkg:
+        - nginx
+        - php8.3
+        - php8.3-fpm
+        - php8.3-mbstring
+        - php8.3-xml
+        - php8.3-xml
+        - php8.3-bcmath
+        - php8.3-mysql
+        - php8.3-cli
+        - php8.3-curl
+        - php8.3-curl
+        - php8.3-gd
+        - php8.3-zip
+        - mysql-server
+        - python3-pymysql
+        - iptables-persistent
+        - git
+
+    - name: Загрузка установочного файла Composer
+      command: "curl -sS https://getcomposer.org/installer -o ~/composer-setup.php"
+
+    - name: Установка Composer
+      command: "php ~/composer-setup.php --install-dir=/usr/local/bin --filename=composer"
+
+- name: Подготовка базы
+  hosts: srv1
+  become: yes
+  tasks:
+    - name: Создание базы 'testlaravel'
+      mysql_db:
+        name: testlaravel
+        state: present
+        collation: utf8_general_ci
+        login_unix_socket: /run/mysqld/mysqld.sock
+      run_once: true
+    - name: Создание пользователя testuser
+      shell: |
+        mysql -u root -ppassword123456 -e "CREATE USER 'testuser'@'localhost' IDENTIFIED BY 'password123456';"
+      become: yes
+      run_once: yes
+    - name: Назначение привелегий пользователю testuser
+      shell: |
+        mysql -u root -ppassword123456 -e "GRANT ALL PRIVILEGES ON testlaravel.* TO 'testuser'@'localhost';"
+      become: yes
+      run_once: yes
+    - name: Применение привелегий
+      shell: |
+        mysql -u root -ppassword123456 -e "FLUSH PRIVILEGES;"
+      become: yes
+      run_once: yes
+- name: Создание таблицы в базе testlaravel
+  hosts: srv1
+  tasks:
+    - name: Создание таблицы "tasks" в базе 'testlaravel'
+      shell: |
+        mysql -u root -ppassword123456 -e "CREATE TABLE testlaravel.tasks (id INT AUTO_INCREMENT, name VARCHAR(255), completed BOOLEAN, sessions VARCHAR(255), PRIMARY KEY(id));"
+      become: yes
+      run_once: yes
+- name: Добавление данных в таблицу
+  hosts: srv1
+  tasks:
+    - name: Добавление данных в таблицу
+      shell: |
+        mysql -u root -ppassword123456 -e "INSERT INTO testlaravel.tasks (name, completed) VALUES ('Купить сервер', false), ('Выполнить первоначальную настройку', true), ('Установить стек с MySQL 8', true), ('Установить Composer', true), ('Установить Laravel', false);"
+      become: yes
+      run_once: yes
+- name: Создание проекта Laravel с помощью Composer
+  hosts: srv1
+  gather_facts: false
+  tasks:
+    - name: Создаем проект namelist
+      shell: /usr/local/bin/composer create-project --prefer-dist laravel/laravel namelist
+      args:
+        chdir: "{{ ansible_env.HOME }}"
+- name: Настройка iptables firewall
+  hosts: srv1
+  become: yes
+  tasks:
+    - name: Открытие портов 22, 80 и 443 в iptables
+      iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_ports:
+          - "22"
+          - "80"
+          - "443"
+        jump: ACCEPT
+    - name: Сохранение правил firewall
+      shell: netfilter-persistent save
+- name: Переместить директорию и изменить владельца
+  hosts: srv1
+  tasks:
+    - name: Изменить название и переместить директорию
+      command: sudo -i mv ~/namelist /var/www/namelist
+
+    - name: Изменение владельца папки storage
+      command: sudo -i chown -R www-data:www-data /var/www/namelist/storage
+
+    - name: Изменение владельца папки cache
+      command: sudo -i chown -R www-data:www-data /var/www/namelist/bootstrap/cache
+- name: Редактирование .env
+  hosts: srv1
+  tasks:
+    - name: Удалить содержимое файла /var/www/namelist/.env
+      become: yes
+      file:
+        path: /var/www/namelist/.env
+        state: absent
+
+    - name: Добавить содержимое в файл /var/www/namelist/.env
+      become: yes
+      copy:
+        dest: /var/www/namelist/.env
+        content: |
+          APP_NAME=namelist
+          APP_ENV=development
+          APP_KEY=APPLICATION_UNIQUE_KEY_DONT_COPY
+          APP_DEBUG=true
+          APP_URL=http://laratest.ru
+          LOG_CHANNEL=stack
+          DB_CONNECTION=mysql
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=testlaravel
+          DB_USERNAME=testuser
+          DB_PASSWORD=password123456
+- name: Миграция данных в базу
+  hosts: srv1
+  tasks:
+    - name: Выполнить команду php artisan migrate
+      become: yes
+      command: php artisan migrate
+      args:
+        chdir: /var/www/namelist
+- name: Настройка вывода из базы данных
+  hosts: srv1
+  tasks:
+    - name: Удалить содержимое файла /var/www/namelist/routes/web.php
+      become: yes
+      file:
+        path: /var/www/namelist/routes/web.php
+        state: absent
+    - name: Создание запроса к базе
+      copy:
+        dest: /var/www/namelist/routes/web.php
+        content: |
+          <?php
+          use Illuminate\Support\Facades\DB;
+          Route::get('/', function () {
+          $completed = DB::select('select * from tasks where completed = ?', [1]);
+          $todo = DB::select('select * from tasks where completed = ?', [0]);
+          return view('namelist', compact('completed', 'todo'));
+          });
+    - name: Создание файла namelist.blade.php
+      become: yes
+      copy:
+        dest: /var/www/namelist/resources/views/namelist.blade.php
+        content: |
+          <html>
+          <head>
+          <title>Список дел</title>
+          </head>
+          <body>
+          <h1>Мой список дел:</h1>
+          <h2>Задачи, которые надо выполнить:</h2>
+          <ul>
+          @foreach ($todo as $task)
+          <li>{{ '{{ $task->name }}' }}</li>
+          @endforeach
+          </ul>
+          <h2>Завершённые задачи:</h2>
+          <ul>
+          @foreach ($completed as $task)
+          <li>{{ '{{ $task->name }}' }}</li>
+          @endforeach
+          </ul>
+          </body>
+          </html>
+- name: Настройка Nginx для отдачи страниц Laravel по доменному имени
+  hosts: srv1
+  become: yes
+  tasks:
+    - name: Создание конфигурационного файла для Nginx
+      copy:
+        dest: /etc/nginx/sites-available/namelist
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              return 301 http://laratest.ru$request_uri;
+          }
+          server {
+              listen 80;
+              server_name laratest.ru;
+
+              root /var/www/namelist/public;
+              index index.php index.html index.htm;
+
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+
+              location = /favicon.ico { access_log off; log_not_found off; }
+              location = /robots.txt  { access_log off; log_not_found off; }
+
+              error_page 404 /index.php;
+
+              location ~ \.php$ {
+                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                  fastcgi_pass unix:/run/php/php8.3-fpm.sock; # Путь до PHP-FPM сокета
+                  fastcgi_index index.php;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  fastcgi_param PATH_INFO $fastcgi_path_info;
+              }
+
+              location ~ /\.(?!well-known).* {
+                  deny all;
+              }
+          }
+    - name: Создание символьной ссылки для namelist
+      file:
+        src: /etc/nginx/sites-available/namelist
+        dest: /etc/nginx/sites-enabled/namelist
+        state: link
+
+    - name: Удаление default настроек
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    - name: Add entry to hosts file
+      shell: echo "10.0.5.142 laratest.ru" | sudo tee -a /etc/hosts
+  handlers:
+    - name: Перезапуск Nginx
+      service:
+        name: nginx
+        state: restarted
